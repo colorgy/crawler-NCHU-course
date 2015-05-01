@@ -18,6 +18,7 @@ courses = []
 			#count = 10
 			courses << {
 				required: datas[0] && datas[0].text,
+				code_number: datas[1] && datas[1].text,
 				code: datas[1] && datas[1].css('a')[0] && datas[1].css('a')[0][:href],
 				name: datas[2] && datas[2].text,
 				semester: datas[4] && datas[4].text,
@@ -37,6 +38,4 @@ end
 File.open('courses.json','w'){|file| file.write(JSON.pretty_generate(courses))}
 
 
-bindling pry
-puts "asdfg"
 
