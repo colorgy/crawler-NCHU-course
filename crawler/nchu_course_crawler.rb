@@ -172,5 +172,5 @@ class NchuCourseCrawler
 
 end
 
-cc = NchuCourseCrawler.new(year: 2014, term: 1)
-File.write('1031_nchu_courses.json', JSON.pretty_generate(cc.courses))
+# cc = NchuCourseCrawler.new(year: 2014, term: 1)
+# File.write('1031_nchu_courses.json', JSON.pretty_generate(cc.courses))
