@@ -116,7 +116,7 @@ class NchuCourseCrawler
           year: @year,
           term: @term,
           required: datas[0] && datas[0].text.include?('必'),
-          code: datas[1] && datas[1].text && "#{@year}-#{@term}-#{general_code}",
+          code: datas[1] && datas[1].text && "#{@year}-#{@term}-#{general_code}-#{department_code}",
           general_code: general_code,
           url: url,
           name: datas[2] && datas[2].text,
