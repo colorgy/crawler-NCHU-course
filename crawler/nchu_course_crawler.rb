@@ -1,6 +1,9 @@
 require 'crawler_rocks'
 require 'pry'
 
+require 'thread'
+require 'thwait'
+
 class NchuCourseCrawler
   include CrawlerRocks::DSL
 
@@ -25,7 +28,8 @@ class NchuCourseCrawler
 
   def initialize year: current_year, term: current_term, update_progress: nil, after_each: nil, params: nil
 
-    @query_url = "https://onepiece.nchu.edu.tw/cofsys/plsql/crseqry_all"
+    # @query_url = "https://onepiece.nchu.edu.tw/cofsys/plsql/crseqry_all"
+    @query_url = "https://onepiece.nchu.edu.tw/cofsys/plsql/crseqry_home"
     @base_url = "https://onepiece.nchu.edu.tw/cofsys/plsql/"
 
     @year = params && params["year"].to_i || year
@@ -35,27 +39,41 @@ class NchuCourseCrawler
   end
 
   def courses
-    visit @query_url
+    @courses = []
+    year_term = "#{@year-1911}#{@term}"
 
-    langs = @doc.css('select[name="v_lang"] option:not(:first-child)').map{ |opt| opt[:value] }
+    visit @query_url + "?v_year=#{year_term}"
+    @deps_h = Hash[@doc.css('select[name="v_dept"] option').map{ |opt| [opt[:value], opt.text.delete(opt[:value]).strip] }]
+    @deps_h_rev = Hash[@deps_h.map{|k, v| [v, k]}]
 
-    @courses = langs.map { |lang|
-      r = RestClient.post @query_url, {
-        v_year: "#{@year-1911}#{@term}",
-        v_lang: lang
-      }
-      parse_courses(Nokogiri::HTML(r.to_s))
-    }.inject {|arr, nxt| arr.concat(nxt)}
+    @threads = []
+    @deps_h.each_key do |dep_c|
+      sleep(1) until (
+        @threads.delete_if { |t| !t.status };  # remove dead (ended) threads
+        @threads.count < (ENV['MAX_THREADS'] || 20)
+      )
+      @threads << Thread.new do
+        r = RestClient.post @query_url, {
+          v_year: year_term,
+          v_career: 'U', # 學士班
+          v_dept: dep_c
+        }
+        parse_courses(Nokogiri::HTML(r.to_s))
+        print "#{@deps_h[dep_c]}\n"
+      end
+    end
+    ThreadsWait.all_waits(*@threads)
 
     @courses
   end
 
   def parse_courses(doc)
-    dep_regex = /選課系所:(?<dep_c>.*?)\s+(?<dep_n>.*?)\s*?年級：(?<g>\d)\s+班別：(?<c>.?)\s*?/
+    # dep_regex = /選課系所:(?<dep_c>.*?)\s+(?<dep_n>.*?)\s*?年級：(?<g>\d)\s+班別：(?<c>.?)\s*?/
+    dep_regex = /系所名稱:(?<dep_n>.+?)\s*?年級:(?<g>\d)?\s+班別:(?<c>.?)\s*?/
     dep_matches = doc.css('strong').map{ |strong| strong.text.strip.gsub(/\&nbsp/, ' ') }.select{|strong| strong.match(dep_regex)}.map{|strong| strong.match(dep_regex)}
 
     _tables =  doc.css('table.word_13')[1..-1]
-    _tables.map.with_index do |table, index|
+    _tables.each_with_index do |table, index|
       table.css('tr')[1..-1].map do |row|
         datas = row.css('td')
         url = "#{@base_url}#{datas[1] && datas[1].css('a')[0] && datas[1].css('a')[0][:href]}"
@@ -76,8 +94,8 @@ class NchuCourseCrawler
 
         # normalize periods
         if times && location
-          delim = times.include?(',') ? ',' : ' '
-          times.split(' ').each do |time|
+          _splt = times.strip.include?(',') ? ',' : ' '
+          times.strip.split(_splt).each do |time|
             time.match(/(?<d>\d)(?<p>.+)/) do |m|
               m[:p].split('').each do |period|
                 next if PERIODS[period].nil?
@@ -89,15 +107,17 @@ class NchuCourseCrawler
           end
         end
 
-        # lecturer = datas[13] && datas[13].text.strip.gsub(/\u3000/, '')
-        # lecturer = datas[12] && datas[12].text.strip if lecturer.empty?
+        department = dep_matches[index][:dep_n]
+        department_code = @deps_h_rev[department]
 
+        general_code = datas[1].text.strip
 
-        {
+        course = {
           year: @year,
           term: @term,
-          required: datas[0] && datas[0].text,
-          code: datas[1] && datas[1].text && "#{@year}-#{@term}-#{datas[1].text.strip}",
+          required: datas[0] && datas[0].text.include?('必'),
+          code: datas[1] && datas[1].text && "#{@year}-#{@term}-#{general_code}",
+          general_code: general_code,
           url: url,
           name: datas[2] && datas[2].text,
           semester: datas[4] && datas[4].text,
@@ -105,8 +125,8 @@ class NchuCourseCrawler
           hour: datas[6] && datas[6].text,
           lecturer: datas[lec_index] && datas[lec_index].text,
           # department: datas[14] && datas[14].text,
-          department: dep_matches[index][:dep_n],
-          department_code: dep_matches[index][:dep_c],
+          department: department,
+          department_code: department_code,
           note: datas[19] && datas[19].text,
           day_1: course_days[0],
           day_2: course_days[1],
@@ -136,8 +156,10 @@ class NchuCourseCrawler
           location_8: course_locations[7],
           location_9: course_locations[8],
         }
+        @after_each_proc.call(course: course) if @after_each_proc
+        @courses << course
       end # table.css('tr')
-    end.inject {|arr, nxt| arr.concat(nxt)} # _tables.map
+    end # .inject {|arr, nxt| arr.concat(nxt)} # _tables.map
   end # parse_courses
 
   def current_year
